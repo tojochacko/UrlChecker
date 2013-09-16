@@ -4,6 +4,8 @@ process.stdin.resume();
 process.stdin.setEncoding('utf8');
 
 process.stdin.on('data', function(chunk) {
+    //@TODO: functionality to check for urls in a file still left
+
     var urlArr = chunk.split('\n');
 
     //remove the last element since its an empty string
