@@ -1,0 +1,14 @@
+{
+  "name": "urlchk",
+  "version": "0.0.0",
+  "description": "this utility checks for valid urls in a file through stdin",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "tojo.c",
+  "license": "BSD-2-Clause",
+  "dependencies": {
+    "request": "~2.27.0"
+  }
+}
