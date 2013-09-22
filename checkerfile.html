@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+
+    <title>Parse data files using Node.js streams - Nicolas Hery</title>
+
+    <meta charset="utf-8">
+    <meta name="description" content="Nicolas Hery is a freelance web developer based in Paris, France. He has a background in applied mathematics, works as a full-stack developer mostly in JavaScript and Node.js, as well as Python for scientific computing.">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="http://fonts.googleapis.com/css?family=Source+Sans+Pro:400,700" rel="stylesheet" type="text/css">
+
+    <link rel="stylesheet" href="/build/style.min.css">
+
+    <script type="text/javascript">
+
+      var _gaq = _gaq || [];
+      _gaq.push(['_setAccount', 'UA-35416477-1']);
+      _gaq.push(['_trackPageview']);
+
+      (function() {
+        var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+        ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+          var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+      })();
+
+    </script>
+  </head>
+
+  <body>
+    <header class="header">
+    <div class="header--profile-picture">
+      <a href="/"><img src="/assets/img/nicolas-hery@2x.jpg " alt="Nicolas Hery"></a>
+    </div>
+    <h1 class="header--title">
+      <a href="/">Nicolas Hery</a>
+      <a href="http://www.tojochacko.cim">Nicolas Hery</a>
+    </h1>
+    <div class="header--tagline">Web development. Data analytics.</div>
+    <ul class="header--nav">
+      <li>
+      <a href="/">Blog</a>
+      </li>
+      <li>
+      <a href="/about">About</a>
+      </li>
+    </ul>
+    </header>
+
+    <section class="post">
+    <h1>Parse data files using Node.js streams</h1>
+    <div class="post--date">09 July, 2013</div>
+    <p><em>In this post I explain how I used Node.js streams to parse and transform data text files.</em></p>
+
+    <p>Streams and pipes are an important part of the <a href="http://www.faqs.org/docs/artu/ch01s06.html">Unix philosophy</a>:</p>
+
+    <blockquote>
+      <p>Write programs that do one thing and do it well. Write programs to work together. Write programs to handle text streams, because that is a universal interface.</p>
+
+      <p>-- Doug McIlroy, inventor of Unix pipes and one of the founders of the Unix tradition</p>
+    </blockquote>
+
+    <p>This means that we can have small, focused programs that are easily assembled together to tackle more complex problems. Sort of like building awesome things with Lego blocks.</p>
+
+    <p>This is also possible in Node.js thanks to the <a href="http://nodejs.org/api/stream.html">Stream</a> interface, and its <code>.pipe()</code> method.</p>
+
+    <p>I won&#39;t go over the general aspects of streams and pipes in Unix and Node.js. For that, I strongly recommend reading <a href="https://twitter.com/substack">@substack</a>&#39;s excellent <a href="https://github.com/substack/stream-handbook">Stream Handbook</a>. In this post, I&#39;d like to show how I started using them. </p>
+
+    <p>During one of my projects, I had to parse text files containing data from some &quot;legacy&quot; system in order to make it more usable and load it into a database. The parsing had a few different steps to it (translate the file to JSON, add and modify data for each record, etc.), and the files varied in size and could get relatively big.</p>
+
+    <p>I thought this would be an ideal candidate for streams. I could split each step into its own &quot;streaming program&quot;, assemble them, and pipe the data through the resulting chain. It would also be fast and memory-efficient, even with bigger files. With streams, the whole file isn&#39;t loaded into memory, rather the data is &quot;buffered&quot; to each program of the chain and throttled to the speed at which they can process the data.</p>
+
+    <p>You can follow along with the code for the example in this article at <a href="https://github.com/nicolashery/example-stream-parser">https://github.com/nicolashery/example-stream-parser</a>.</p>
+
+    <h2 id="the-data-file-to-parse">The data file to parse</h2>
+
+    <p>In this example, I&#39;m going to use some silly made-up data (its format inspired by some files I&#39;ve had to parse).</p>
+
+    <p>Let&#39;s say our objective is to turn a <code>data.csv</code> file containing something like:</p>
+    <div class="highlight"><pre><code class="text language-text" data-lang="text">Game Export (v1.2)
+                                                                                                                                          GameId,1234567
+                                                                                                                                          Player,1,Homer Simpson
+                                                                                                                                          Player,2,Bart Simpson
+                                                                                                                                          Player,3,Marge Simpson
+                                                                                                                                          Map,101,Crossroads
+                                                                                                                                          Time Range,2013-01-11 02:50:40,2013-01-12 05:34:56
+                                                                                                                                          Number of Records,100
+                                                                                                                                          Index,Timestamp,Event Type,Player Id,Event Data
+                                                                                                                                          1,2013-01-11 02:54:42,ResourcesGathered,3,&quot;resource_type=Wood, quantity=11&quot;
+                                                                                                                                          2,2013-01-11 03:00:26,ResourcesGathered,2,&quot;resource_type=Gold, quantity=7&quot;
+                                                                                                                                          3,2013-01-11 03:05:42,ResourcesGathered,1,&quot;resource_type=Gold, quantity=2&quot;
+                                                                                                                                          4,2013-01-11 03:08:05,UnitTrained,3,&quot;unit_type=Knight, health=270, damage=12-15&quot;
+                                                                                                                                          5,2013-01-11 03:24:05,DestroyedEnemy,1,&quot;unit_type=Pig Farm&quot;
+                                                                                                                                          </code></pre></div>
+    <p>Into this more usable format:</p>
+    <div class="highlight"><pre><code class="json language-json" data-lang="json"><span class="p">{</span><span class="nt">&quot;header&quot;</span><span class="p">:{</span><span class="nt">&quot;Title&quot;</span><span class="p">:</span><span class="s2">&quot;Game Export (v1.2)&quot;</span><span class="p">,</span><span class="nt">&quot;GameId&quot;</span><span class="p">:</span><span class="s2">&quot;1234567&quot;</span><span class="p">,</span><span class="nt">&quot;Players&quot;</span><span class="p">:[{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="s2">&quot;1&quot;</span><span class="p">,</span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="s2">&quot;Homer Simpson&quot;</span><span class="p">},{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="s2">&quot;2&quot;</span><span class="p">,</span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="s2">&quot;Bart Simpson&quot;</span><span class="p">},{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="s2">&quot;3&quot;</span><span class="p">,</span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="s2">&quot;Marge Simpson&quot;</span><span class="p">}],</span><span class="nt">&quot;Map&quot;</span><span class="p">:{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="s2">&quot;101&quot;</span><span class="p">,</span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="s2">&quot;Crossroads&quot;</span><span class="p">},</span><span class="nt">&quot;Time Range&quot;</span><span class="p">:{</span><span class="nt">&quot;start&quot;</span><span class="p">:</span><span class="s2">&quot;2013-01-11 02:50:40&quot;</span><span class="p">,</span><span class="nt">&quot;end&quot;</span><span class="p">:</span><span class="s2">&quot;2013-01-12 05:34:56&quot;</span><span class="p">},</span><span class="nt">&quot;Number of Records&quot;</span><span class="p">:</span><span class="s2">&quot;100&quot;</span><span class="p">,</span><span class="nt">&quot;Columns&quot;</span><span class="p">:[</span><span class="s2">&quot;Index&quot;</span><span class="p">,</span><span class="s2">&quot;Timestamp&quot;</span><span class="p">,</span><span class="s2">&quot;Event Type&quot;</span><span class="p">,</span><span class="s2">&quot;Player Id&quot;</span><span class="p">,</span><span class="s2">&quot;Event Data&quot;</span><span class="p">]}}</span>
+                                                                                                                                          <span class="p">{</span><span class="nt">&quot;Index&quot;</span><span class="p">:</span><span class="s2">&quot;1&quot;</span><span class="p">,</span><span class="nt">&quot;Timestamp&quot;</span><span class="p">:</span><span class="s2">&quot;2013-01-11 02:54:42&quot;</span><span class="p">,</span><span class="nt">&quot;Event Type&quot;</span><span class="p">:</span><span class="s2">&quot;ResourcesGathered&quot;</span><span class="p">,</span><span class="nt">&quot;Player Id&quot;</span><span class="p">:</span><span class="s2">&quot;3&quot;</span><span class="p">,</span><span class="nt">&quot;Event Data&quot;</span><span class="p">:{</span><span class="nt">&quot;resource_type&quot;</span><span class="p">:</span><span class="s2">&quot;Wood&quot;</span><span class="p">,</span><span class="nt">&quot;quantity&quot;</span><span class="p">:</span><span class="s2">&quot;11&quot;</span><span class="p">}}</span>
+                                                                                                                                          <span class="p">{</span><span class="nt">&quot;Index&quot;</span><span class="p">:</span><span class="s2">&quot;2&quot;</span><span class="p">,</span><span class="nt">&quot;Timestamp&quot;</span><span class="p">:</span><span class="s2">&quot;2013-01-11 03:00:26&quot;</span><span class="p">,</span><span class="nt">&quot;Event Type&quot;</span><span class="p">:</span><span class="s2">&quot;ResourcesGathered&quot;</span><span class="p">,</span><span class="nt">&quot;Player Id&quot;</span><span class="p">:</span><span class="s2">&quot;2&quot;</span><span class="p">,</span><span class="nt">&quot;Event Data&quot;</span><span class="p">:{</span><span class="nt">&quot;resource_type&quot;</span><span class="p">:</span><span class="s2">&quot;Gold&quot;</span><span class="p">,</span><span class="nt">&quot;quantity&quot;</span><span class="p">:</span><span class="s2">&quot;7&quot;</span><span class="p">}}</span>
+                                                                                                                                          <span class="p">{</span><span class="nt">&quot;Index&quot;</span><span class="p">:</span><span class="s2">&quot;3&quot;</span><span class="p">,</span><span class="nt">&quot;Timestamp&quot;</span><span class="p">:</span><span class="s2">&quot;2013-01-11 03:05:42&quot;</span><span class="p">,</span><span class="nt">&quot;Event Type&quot;</span><span class="p">:</span><span class="s2">&quot;ResourcesGathered&quot;</span><span class="p">,</span><span class="nt">&quot;Player Id&quot;</span><span class="p">:</span><span class="s2">&quot;1&quot;</span><span class="p">,</span><span class="nt">&quot;Event Data&quot;</span><span class="p">:{</span><span class="nt">&quot;resource_type&quot;</span><span class="p">:</span><span class="s2">&quot;Gold&quot;</span><span class="p">,</span><span class="nt">&quot;quantity&quot;</span><span class="p">:</span><span class="s2">&quot;2&quot;</span><span class="p">}}</span>
+                                                                                                                                          <span class="p">{</span><span class="nt">&quot;Index&quot;</span><span class="p">:</span><span class="s2">&quot;4&quot;</span><span class="p">,</span><span class="nt">&quot;Timestamp&quot;</span><span class="p">:</span><span class="s2">&quot;2013-01-11 03:08:05&quot;</span><span class="p">,</span><span class="nt">&quot;Event Type&quot;</span><span class="p">:</span><span class="s2">&quot;UnitTrained&quot;</span><span class="p">,</span><span class="nt">&quot;Player Id&quot;</span><span class="p">:</span><span class="s2">&quot;3&quot;</span><span class="p">,</span><span class="nt">&quot;Event Data&quot;</span><span class="p">:{</span><span class="nt">&quot;unit_type&quot;</span><span class="p">:</span><span class="s2">&quot;Knight&quot;</span><span class="p">,</span><span class="nt">&quot;health&quot;</span><span class="p">:</span><span class="s2">&quot;270&quot;</span><span class="p">,</span><span class="nt">&quot;damage&quot;</span><span class="p">:</span><span class="s2">&quot;12-15&quot;</span><span class="p">}}</span>
+                                                                                                                                          <span class="p">{</span><span class="nt">&quot;Index&quot;</span><span class="p">:</span><span class="s2">&quot;5&quot;</span><span class="p">,</span><span class="nt">&quot;Timestamp&quot;</span><span class="p">:</span><span class="s2">&quot;2013-01-11 03:24:05&quot;</span><span class="p">,</span><span class="nt">&quot;Event Type&quot;</span><span class="p">:</span><span class="s2">&quot;DestroyedEnemy&quot;</span><span class="p">,</span><span class="nt">&quot;Player Id&quot;</span><span class="p">:</span><span class="s2">&quot;1&quot;</span><span class="p">,</span><span class="nt">&quot;Event Data&quot;</span><span class="p">:{</span><span class="nt">&quot;unit_type&quot;</span><span class="p">:</span><span class="s2">&quot;Pig Farm&quot;</span><span class="p">}}</span>
+                                                                                                                                          </code></pre></div>
+    <h2 id="a-first-basic-stream">A first basic stream</h2>
+
+    <p>Let&#39;s create a first Node.js stream to pipe our data file to. This stream will do nothing really, just pass the data as-is to the next stream in the chain.</p>
+
+    <p>For that, we will be using the very handy <a href="http://nodejs.org/api/stream.html#stream_class_stream_transform">Transform</a> stream, which is both <a href="http://nodejs.org/api/stream.html#stream_class_stream_writable">Writable</a> and <a href="http://nodejs.org/api/stream.html#stream_class_stream_readable">Readable</a> (in other words, data comes in and also comes out).</p>
+
+    <p>All we need is to create a <code>Transform</code> stream and implement its <code>_transform</code> method. For now we&#39;ll just push data without doing anything with it.</p>
+    <div class="highlight"><pre><code class="javascript language-javascript" data-lang="javascript"><span class="c1">// parser.js</span>
+                                                                                                                                          <span class="kd">var</span> <span class="nx">Transform</span> <span class="o">=</span> <span class="nx">require</span><span class="p">(</span><span class="s1">&#39;stream&#39;</span><span class="p">).</span><span class="nx">Transform</span><span class="p">;</span>
+
+                                                                                                                                          <span class="kd">var</span> <span class="nx">parser</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Transform</span><span class="p">();</span>
+                                                                                                                                          <span class="nx">parser</span><span class="p">.</span><span class="nx">_transform</span> <span class="o">=</span> <span class="kd">function</span><span class="p">(</span><span class="nx">data</span><span class="p">,</span> <span class="nx">encoding</span><span class="p">,</span> <span class="nx">done</span><span class="p">)</span> <span class="p">{</span>
+                                                                                                                                            <span class="k">this</span><span class="p">.</span><span class="nx">push</span><span class="p">(</span><span class="nx">data</span><span class="p">);</span>
+                                                                                                                                              <span class="nx">done</span><span class="p">();</span>
+                                                                                                                                              <span class="p">};</span>
+                                                                                                                                              </code></pre></div>
+    <p>Now let&#39;s add a bit to pipe data coming in from <code>stdin</code>, through our <code>parser</code>, and then out to <code>stdout</code>:</p>
+    <div class="highlight"><pre><code class="javascript language-javascript" data-lang="javascript"><span class="c1">// Pipe the streams</span>
+                                                                                                                                          <span class="nx">process</span><span class="p">.</span><span class="nx">stdin</span>
+                                                                                                                                          <span class="p">.</span><span class="nx">pipe</span><span class="p">(</span><span class="nx">parser</span><span class="p">)</span>
+                                                                                                                                          <span class="p">.</span><span class="nx">pipe</span><span class="p">(</span><span class="nx">process</span><span class="p">.</span><span class="nx">stdout</span><span class="p">);</span>
+
+                                                                                                                                          <span class="c1">// Some programs like `head` send an error on stdout</span>
+                                                                                                                                          <span class="c1">// when they don&#39;t want any more data</span>
+                                                                                                                                          <span class="nx">process</span><span class="p">.</span><span class="nx">stdout</span><span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s1">&#39;error&#39;</span><span class="p">,</span> <span class="nx">process</span><span class="p">.</span><span class="nx">exit</span><span class="p">);</span>
+                                                                                                                                          </code></pre></div>
+    <p>Now if we run in the terminal:</p>
+    <div class="highlight"><pre><code class="bash language-bash" data-lang="bash"><span class="nv">$ </span>cat data.csv | node parser
+                                                                                                                                          Game Export <span class="o">(</span>v1.2<span class="o">)</span>
+                                                                                                                                          GameId,1234567
+                                                                                                                                          Player,1,Homer Simpson
+                                                                                                                                          <span class="c"># ...</span>
+                                                                                                                                          </code></pre></div>
+    <p>We should see our data being streamed through the <code>parser</code> correctly!</p>
+
+    <h2 id="parse-the-csv-file">Parse the CSV file</h2>
+
+    <p>The first thing I&#39;d like to do is split those comma-separated values into objects I can manipulate.</p>
+
+    <p>Instead of reinventing the wheel, an <a href="https://npmjs.org">npm</a> search brings up <a href="https://github.com/klaemo/csv-stream">csv-streamify</a> which I can use. It will be easy to plug in my own <code>parser</code> logic on top of it, thanks to <code>.pipe()</code>. This is the beauty of streams.</p>
+
+    <p>I&#39;ll set the <code>objectMode</code> option to <code>true</code> for both <code>csv-streamify</code> and my <code>parser</code> to work with JavaScript objects (instead of strings). The <code>stdout</code> stream expects strings though, so I&#39;ll convert back to them with <a href="https://github.com/dominictarr/JSONStream">JSONStream</a>:</p>
+    <div class="highlight"><pre><code class="javascript language-javascript" data-lang="javascript"><span class="kd">var</span> <span class="nx">Transform</span> <span class="o">=</span> <span class="nx">require</span><span class="p">(</span><span class="s1">&#39;stream&#39;</span><span class="p">).</span><span class="nx">Transform</span>
+                                                                                                                                            <span class="p">,</span> <span class="nx">csv</span> <span class="o">=</span> <span class="nx">require</span><span class="p">(</span><span class="s1">&#39;csv-streamify&#39;</span><span class="p">)</span>
+                                                                                                                                              <span class="p">,</span> <span class="nx">JSONStream</span> <span class="o">=</span> <span class="nx">require</span><span class="p">(</span><span class="s1">&#39;JSONStream&#39;</span><span class="p">);</span>
+
+                                                                                                                                              <span class="kd">var</span> <span class="nx">csvToJson</span> <span class="o">=</span> <span class="nx">csv</span><span class="p">({</span><span class="nx">objectMode</span><span class="o">:</span> <span class="kc">true</span><span class="p">});</span>
+
+                                                                                                                                              <span class="kd">var</span> <span class="nx">parser</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Transform</span><span class="p">({</span><span class="nx">objectMode</span><span class="o">:</span> <span class="kc">true</span><span class="p">});</span>
+                                                                                                                                              <span class="nx">parser</span><span class="p">.</span><span class="nx">_transform</span> <span class="o">=</span> <span class="kd">function</span><span class="p">(</span><span class="nx">data</span><span class="p">,</span> <span class="nx">encoding</span><span class="p">,</span> <span class="nx">done</span><span class="p">)</span> <span class="p">{</span>
+                                                                                                                                                <span class="k">this</span><span class="p">.</span><span class="nx">push</span><span class="p">(</span><span class="nx">data</span><span class="p">);</span>
+                                                                                                                                                  <span class="nx">done</span><span class="p">();</span>
+                                                                                                                                                  <span class="p">};</span>
+
+                                                                                                                                                  <span class="kd">var</span> <span class="nx">jsonToStrings</span> <span class="o">=</span> <span class="nx">JSONStream</span><span class="p">.</span><span class="nx">stringify</span><span class="p">(</span><span class="kc">false</span><span class="p">);</span>
+
+                                                                                                                                                  <span class="nx">process</span><span class="p">.</span><span class="nx">stdin</span>
+                                                                                                                                                  <span class="p">.</span><span class="nx">pipe</span><span class="p">(</span><span class="nx">csvToJson</span><span class="p">)</span>
+                                                                                                                                                  <span class="p">.</span><span class="nx">pipe</span><span class="p">(</span><span class="nx">parser</span><span class="p">)</span>
+                                                                                                                                                  <span class="p">.</span><span class="nx">pipe</span><span class="p">(</span><span class="nx">jsonToStrings</span><span class="p">)</span>
+                                                                                                                                                  <span class="p">.</span><span class="nx">pipe</span><span class="p">(</span><span class="nx">process</span><span class="p">.</span><span class="nx">stdout</span><span class="p">);</span>
+                                                                                                                                                  </code></pre></div>
+    <p>Now if we run our parser we should see the CSV file is being turned into arrays:</p>
+    <div class="highlight"><pre><code class="bash language-bash" data-lang="bash"><span class="nv">$ </span>cat data.csv | node parser
+                                                                                                                                          <span class="o">[</span><span class="s2">&quot;Game Export (v1.2)&quot;</span><span class="o">]</span>
+                                                                                                                                          <span class="o">[</span><span class="s2">&quot;GameId&quot;</span>,<span class="s2">&quot;1234567&quot;</span><span class="o">]</span>
+                                                                                                                                          <span class="o">[</span><span class="s2">&quot;Player&quot;</span>,<span class="s2">&quot;1&quot;</span>,<span class="s2">&quot;Homer Simpson&quot;</span><span class="o">]</span>
+                                                                                                                                          <span class="c"># ...</span>
+                                                                                                                                          </code></pre></div>
+    <h2 id="add-some-data-transforms">Add some data transforms</h2>
+
+    <p>Now that we have some basic streams wired up, it&#39;s time to add some data manipulation to the <code>parser</code>.</p>
+
+    <p>We can, for instance, aggregate the header into one object:</p>
+    <div class="highlight"><pre><code class="javascript language-javascript" data-lang="javascript"><span class="nx">parser</span><span class="p">.</span><span class="nx">header</span> <span class="o">=</span> <span class="kc">null</span><span class="p">;</span>
+                                                                                                                                          <span class="nx">parser</span><span class="p">.</span><span class="nx">_rawHeader</span> <span class="o">=</span> <span class="p">[];</span>
+                                                                                                                                          <span class="nx">parser</span><span class="p">.</span><span class="nx">_transform</span> <span class="o">=</span> <span class="kd">function</span><span class="p">(</span><span class="nx">data</span><span class="p">,</span> <span class="nx">encoding</span><span class="p">,</span> <span class="nx">done</span><span class="p">)</span> <span class="p">{</span>
+                                                                                                                                            <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="k">this</span><span class="p">.</span><span class="nx">header</span><span class="p">)</span> <span class="p">{</span>
+                                                                                                                                                <span class="k">this</span><span class="p">.</span><span class="nx">_rawHeader</span><span class="p">.</span><span class="nx">push</span><span class="p">(</span><span class="nx">data</span><span class="p">);</span>
+                                                                                                                                                    <span class="k">if</span> <span class="p">(</span><span class="nx">data</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">===</span> <span class="s1">&#39;Index&#39;</span><span class="p">)</span> <span class="p">{</span>
+                                                                                                                                                          <span class="c1">// We reached the last line of the header</span>
+                                                                                                                                                                <span class="k">this</span><span class="p">.</span><span class="nx">header</span> <span class="o">=</span> <span class="k">this</span><span class="p">.</span><span class="nx">_rawHeader</span><span class="p">;</span>
+                                                                                                                                                                      <span class="k">this</span><span class="p">.</span><span class="nx">push</span><span class="p">({</span><span class="nx">header</span><span class="o">:</span> <span class="k">this</span><span class="p">.</span><span class="nx">header</span><span class="p">});</span>
+                                                                                                                                                                          <span class="p">}</span>
+                                                                                                                                                                            <span class="p">}</span>
+                                                                                                                                                                              <span class="c1">// After parsing the header, push data rows</span>
+                                                                                                                                                                                <span class="k">else</span> <span class="p">{</span>
+                                                                                                                                                                                    <span class="k">this</span><span class="p">.</span><span class="nx">push</span><span class="p">({</span><span class="nx">row</span><span class="o">:</span> <span class="nx">data</span><span class="p">});</span>
+                                                                                                                                                                                      <span class="p">}</span>
+                                                                                                                                                                                        <span class="nx">done</span><span class="p">();</span>
+                                                                                                                                                                                        <span class="p">};</span>
+                                                                                                                                                                                        </code></pre></div>
+    <p>Running the program now will output:</p>
+    <div class="highlight"><pre><code class="bash language-bash" data-lang="bash"><span class="nv">$ </span>cat data.csv | node parser
+                                                                                                                                          <span class="o">{</span><span class="s2">&quot;header&quot;</span>:<span class="o">[[</span><span class="s2">&quot;Game Export (v1.2)&quot;</span><span class="o">]</span>,<span class="o">[</span><span class="s2">&quot;GameId&quot;</span>,<span class="s2">&quot;1234567&quot;</span><span class="o">]</span>,<span class="o">[</span><span class="s2">&quot;Player&quot;</span>,<span class="s2">&quot;1&quot;</span>,<span class="s2">&quot;Homer Simpson&quot;</span><span class="o">]</span>,<span class="o">[</span><span class="s2">&quot;Player&quot;</span>,<span class="s2">&quot;2&quot;</span>,<span class="s2">&quot;Bart Simpson&quot;</span><span class="o">]</span>,<span class="o">[</span><span class="s2">&quot;Player&quot;</span>,<span class="s2">&quot;3&quot;</span>,<span class="s2">&quot;Marge Simpson&quot;</span><span class="o">]</span>,<span class="o">[</span><span class="s2">&quot;Map&quot;</span>,<span class="s2">&quot;101&quot;</span>,<span class="s2">&quot;Crossroads&quot;</span><span class="o">]</span>,<span class="o">[</span><span class="s2">&quot;Time Range&quot;</span>,<span class="s2">&quot;2013-01-11 02:50:40&quot;</span>,<span class="s2">&quot;2013-01-12 05:34:56&quot;</span><span class="o">]</span>,<span class="o">[</span><span class="s2">&quot;Number of Records&quot;</span>,<span class="s2">&quot;100&quot;</span><span class="o">]</span>,<span class="o">[</span><span class="s2">&quot;Index&quot;</span>,<span class="s2">&quot;Timestamp&quot;</span>,<span class="s2">&quot;Event Type&quot;</span>,<span class="s2">&quot;Player Id&quot;</span>,<span class="s2">&quot;Event Data&quot;</span><span class="o">]]}</span>
+                                                                                                                                          <span class="o">{</span><span class="s2">&quot;row&quot;</span>:<span class="o">[</span><span class="s2">&quot;1&quot;</span>,<span class="s2">&quot;2013-01-11 02:54:42&quot;</span>,<span class="s2">&quot;ResourcesGathered&quot;</span>,<span class="s2">&quot;3&quot;</span>,<span class="s2">&quot;resource_type=Wood, quantity=11&quot;</span><span class="o">]}</span>
+                                                                                                                                          <span class="c"># ...</span>
+                                                                                                                                          </code></pre></div>
+    <p>I won&#39;t describe the rest of the transform logic to get to the result mentioned at the beginning of this post, but you can find the <a href="https://github.com/nicolashery/example-stream-parser/blob/master/lib/parser.js">full code on GitHub</a>.</p>
+
+    <h2 id="more-streaming-data-fun">More streaming data fun</h2>
+
+    <p>From here, there are many things we might want to do with our parsed data. Again, thanks to the composable and elegant interface of Node.js streams, this is very easy to do.</p>
+
+    <p>We already have a command line tool working (<a href="https://github.com/nicolashery/example-stream-parser/blob/master/examples/cmd.js">examples/cmd.js</a>), which allows us to use it with other Unix tools, such as <code>cat</code>, <code>head</code>, <code>wc</code>, etc.</p>
+
+    <p>We could also pipe the parser into another stream that would manipulate the data further and possibly save it to a database or HTTP API (<a href="https://github.com/nicolashery/example-stream-parser/blob/master/examples/transform.js">examples/transform.js</a>).</p>
+
+    <p>Another usage could be to include the parser into a server (<code>request</code> and <code>response</code> passed by <a href="http://nodejs.org/api/http.html#http_class_http_server">http.Server</a> are also streams!). This way we could provide a &quot;parser-as-a-service&quot; through HTTP (<a href="https://github.com/nicolashery/example-stream-parser/blob/master/examples/server.js">examples/server.js</a>), like what <a href="https://twitter.com/maxogden">@maxogden</a> describes in <a href="http://maxogden.com/gut-hosted-open-data-filets.html">&quot;Gut: Hosted Open Data Filet Knives&quot;</a>.</p>
+
+    <h2 id="conclusion">Conclusion</h2>
+
+    <p>Streams made it really pleasant to build a relatively complex data file parser out of small and simple components. On top of that, I don&#39;t have to worry about how big the data files get. The parser will remain fast and memory-efficient thanks to the pipe interface between the streams.</p>
+
+    <p>If you weren&#39;t familiar with streams before, I hope this example made you curious and want to give them a try.</p>
+
+    <p>Or maybe you&#39;ve already worked with Node.js streams to process data? Feel free to share your experience!</p>
+
+    <div class="post--comments">
+
+      <div id="disqus_thread"></div>
+      <script type="text/javascript">
+        /* * * CONFIGURATION VARIABLES: EDIT BEFORE PASTING INTO YOUR WEBPAGE * * */
+        var disqus_shortname = 'nicolashery'; // required: replace example with your forum shortname
+
+        /* * * DON'T EDIT BELOW THIS LINE * * */
+        (function() {
+          var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+          dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+          (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+        })();
+      </script>
+      <noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+      <a href="http://disqus.com" class="dsq-brlink">comments powered by <span class="logo-disqus">Disqus</span></a>
+
+
+    </div>
+    </section>
+
+
+    <footer class="footer">
+    <ul class="footer--links">
+      <li>
+      <a href="https://twitter.com/nicolas_hery">Twitter</a>
+      </li>
+      <li>
+      <a href="https://github.com/nicolashery">GitHub</a>
+      </li>
+      <li>
+      <a href="/feed.xml">RSS</a>
+      </li>
+    </ul>
+    <p class="footer--copyright">© Copyright 2013 Nicolas Hery</p>
+    </footer>
+
+
+    <script src="/build/app.min.js"></script>
+
+  </body>
+
+</html>

@@ -7,13 +7,28 @@ var parser = new htmlparser.Parser({
         if(name === "a"){
             if(beginswithHttp(attribs.href)) {
                 //console.log(attribs.href);
-                requesturl(attribs.href); 
+                requestURL(attribs.href); 
             }
         }
     },
+    ontext: function(text) {
+        var urlArr = text.split('\n');
+
+        //remove the last element since its an empty string
+        urlArr.pop();
+        splitArrNresolveURL(urlArr); 
+    },
 });
 
-function requesturl(url) {
+function splitArrNresolveURL(arr) {
+    var urlToChk;
+    for(var i=0; i<arr.length;i++) {
+        urlToChk = arr[i];
+        requestURL(urlToChk);
+    }
+}
+
+function requestURL(url) {
     request(url, function (error, response, body) {
         if(error || response.statusCode != 200) {
             console.log('Rougue Url: '+url);
