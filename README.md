@@ -5,3 +5,6 @@ this app ->
 * checks if the hyperlink is a valid one.
 * if the link is not valid the it spits it out to stdout.
 
+To Demo:
+* Fork the code to your local setup.
+* Run `node index < checkerfile` from the code directory.
