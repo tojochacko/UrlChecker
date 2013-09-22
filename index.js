@@ -5,8 +5,7 @@ var data = '';
 var parser = new htmlparser.Parser({
     onopentag: function(name, attribs){
         if(name === "a"){
-            if(beginswithHttp(attribs.href)) {
-                //console.log(attribs.href);
+            if(beginsWithHttp(attribs.href)) {
                 requestURL(attribs.href); 
             }
         }
@@ -37,9 +36,8 @@ function requestURL(url) {
     });
 }
 
-function beginswithHttp(url) {
+function beginsWithHttp(url) {
     var regex = new RegExp("/((http|https):\/\/(\w+:{0,1}\w*@)?(\S+)|)(:[0-9]+)?(\/|\/([\w#!:.?+=&%@!\-\/]))?/");
-
     return regex.test(url);
 } 
 
