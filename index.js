@@ -4,18 +4,11 @@ var data = '';
 
 var parser = new htmlparser.Parser({
     onopentag: function(name, attribs){
-        if(name === "a"){
+        if(name === "a" && attribs.href != ''){
             if(beginsWithHttp(attribs.href)) {
                 requestURL(attribs.href); 
             }
         }
-    },
-    ontext: function(text) {
-        var urlArr = text.split('\n');
-
-        //remove the last element since its an empty string
-        urlArr.pop();
-        splitArrNresolveURL(urlArr); 
     },
 });
 
@@ -49,6 +42,19 @@ process.stdin.on('data', function(chunk) {
 });
 
 process.stdin.on('end', function() {
-    parser.write(data);
-    parser.end();
+    //if data that we are reading is as an html
+    var strObj = new String(data);
+    if(strObj.match(/<(html.*)>/)) {
+        console.log('data is html, hence using the HTMLPARSER library');       
+        parser.write(data);
+        parser.end();
+    }
+    else {
+        console.log('data is plain text');   
+        var urlArr = data.split('\n');
+    
+        //remove the last element since its an empty string
+        urlArr.pop();
+        splitArrNresolveURL(urlArr);
+    }
 });
